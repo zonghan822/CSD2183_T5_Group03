@@ -215,7 +215,7 @@ struct SegKey {
 };
 struct SegKeyHash {
     std::size_t operator()(const SegKey& s) const {
-        return std::hash<long long>{}((long long(s.va) << 32) | unsigned(s.vb));
+        return std::hash<long long>{}((static_cast<long long>(s.va) << 32) | static_cast<unsigned>(s.vb));
     }
 };
 struct CellKey {
@@ -224,7 +224,7 @@ struct CellKey {
 };
 struct CellKeyHash {
     std::size_t operator()(const CellKey& c) const {
-        return std::hash<long long>{}((long long(c.col) << 32) | unsigned(c.row));
+        return std::hash<long long>{}((static_cast<long long>(c.col) << 32) | static_cast<unsigned>(c.row));
     }
 };
 
@@ -239,7 +239,7 @@ class GridIndex {
     std::unordered_map<long long, SegInfo> seg_map_;
 
     static long long encode(int va, int vb) {
-        return (long long(va) << 32) | unsigned(vb);
+        return (static_cast<long long>(va) << 32) | static_cast<unsigned>(vb);
     }
 
     std::vector<CellKey> cells_for(double x0, double y0,
