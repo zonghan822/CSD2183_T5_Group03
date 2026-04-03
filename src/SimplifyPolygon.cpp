@@ -63,6 +63,11 @@ struct Vertex {
     }
 
     void invalidate_cache() const { area_valid = false; }
+
+    double segment_length() const {
+        double dx = next->x - x, dy = next->y - y;
+        return std::hypot(dx, dy);
+    }
 };
 
 struct Ring {
@@ -201,7 +206,7 @@ static bool segments_intersect(const Vertex* a, const Vertex* b,
 }
 
 // =========================================================================== //
-//  Spatial index
+//  Spatial index — uniform grid
 // =========================================================================== //
 
 struct SegKey {
@@ -361,16 +366,26 @@ class GlobalAPSCSimplifier {
     void push_vertex(Vertex* v) {
         if (!v->alive || v->ring->size() <= 3) return;
         v->invalidate_cache();
-        ++v->current_version;
 
-        double cost = std::abs(v->triangle_area());
-        pq_.push({cost, v->current_version, v});
+        double base_cost = std::abs(v->triangle_area());
+
+        double dx1 = v->x - v->prev->x, dy1 = v->y - v->prev->y;
+        double dx2 = v->next->x - v->x, dy2 = v->next->y - v->y;
+        double dot = dx1*dx2 + dy1*dy2;
+        double len1 = std::hypot(dx1, dy1), len2 = std::hypot(dx2, dy2);
+        double cos_theta = dot / (len1 * len2 + 1e-9);
+        double penalty   = (cos_theta < -0.5) ? 2.0 : 1.0;
+
+        double final_cost = (base_cost + v->accumulated_error) * penalty;
+
+        ++v->current_version;
+        pq_.push({final_cost, v->current_version, v});
     }
 
     // Iterative Newton correction
     void correct_area(Ring* ring) {
-        double target = orig_area_.at(ring->rid);
-        double target_signed = target;
+        double target        = orig_area_.at(ring->rid);
+        double target_signed = ring->is_exterior ? target : -target;
 
         for (int iter = 0; iter < 10; ++iter) {
             double current = ring->signed_area(true);
