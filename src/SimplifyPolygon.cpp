@@ -32,7 +32,6 @@ struct Vertex {
 
     int current_version = 0;
 
-    // Cached signed triangle area
     mutable bool   area_valid  = false;
     mutable double cached_area = 0.0;
 
@@ -114,26 +113,29 @@ public:
 
     void invalidate_area_cache() { area_valid_ = false; }
 
-    // APSC segment collapse: replace the B→C edge with Steiner point E.
-    // The sequence A→B→C→D becomes A→E→D; C is marked dead.
-    void collapse_segment(Vertex* b, Vertex* c, double ex, double ey) {
-        Vertex* a = b->prev;
-        Vertex* d = c->next;
+    // Remove vertex v from the ring; returns its former neighbours.
+    std::pair<Vertex*, Vertex*> collapse_vertex(Vertex* v) {
+        if (size_ <= 3)
+            throw std::runtime_error("Cannot collapse: ring would degenerate.");
 
-        b->x    = ex; // B is repurposed as the new Steiner point E
-        b->y    = ey;
-        b->next = d;
-        d->prev = b;
+        Vertex* p = v->prev;
+        Vertex* n = v->next;
 
-        c->alive = false; // C is removed from the ring
+        p->next = n;
+        n->prev = p;
 
-        a->invalidate_cache();
-        b->invalidate_cache();
-        d->invalidate_cache();
+        p->invalidate_cache();
+        n->invalidate_cache();
 
-        if (head_ == c) head_ = b;
+        v->alive = false;
+        v->prev  = nullptr;
+        v->next  = nullptr;
+        v->ring  = nullptr;
+
+        if (head_ == v) head_ = n;
         --size_;
         invalidate_area_cache();
+        return {p, n};
     }
 
     std::vector<std::pair<double, double>> to_coords() const {
@@ -146,141 +148,55 @@ public:
 };
 
 // =========================================================================== //
-//  Geometry helpers for Steiner-point placement (Kronenfeld 2020)
+//  Greedy simplifier — global min-heap, no topology check yet
 // =========================================================================== //
 
-// Perpendicular distance from point P to line AB.
-static double point_to_line_dist(double px, double py,
-                                  double ax, double ay,
-                                  double bx, double by) {
-    double num  = std::abs((by - ay) * px - (bx - ax) * py + bx * ay - by * ax);
-    double denom = std::hypot(bx - ax, by - ay);
-    return (denom < 1e-12) ? 0.0 : num / denom;
-}
-
-// Intersection of line (p1, dir v1) with line (p2, dir v2).
-static std::pair<double, double> line_intersect(double x1, double y1,
-                                                 double vx1, double vy1,
-                                                 double x2, double y2,
-                                                 double vx2, double vy2) {
-    double det = vx1 * vy2 - vy1 * vx2;
-    if (std::abs(det) < 1e-9) return {x1, y1}; // parallel fallback
-    double t = (vy1 * (x2 - x1) - vx1 * (y2 - y1)) / det;
-    return {x2 + t * vx2, y2 + t * vy2};
-}
-
-// =========================================================================== //
-//  Collapse priority queue (lazy-deletion min-heap)
-// =========================================================================== //
-
-class CollapseQueue {
-    struct Entry {
-        double  key;
-        int     version;
-        Vertex* v;
-        bool operator>(const Entry& o) const { return key > o.key; }
-    };
-    std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> heap_;
-
-public:
-    void push(Vertex* v) {
-        v->invalidate_cache();
-        ++v->current_version;
-        heap_.push({std::abs(v->triangle_area()), v->current_version, v});
-    }
-
-    Vertex* pop() {
-        while (!heap_.empty()) {
-            auto [key, ver, v] = heap_.top();
-            heap_.pop();
-            if (v->alive && ver == v->current_version) return v;
-        }
-        return nullptr;
-    }
-
-    bool empty() const { return heap_.empty(); }
-};
-
-// =========================================================================== //
-//  APSC simplifier — per-ring Steiner collapse
-// =========================================================================== //
-
-class APSCSimplifier {
+class GreedySimplifier {
     std::vector<Ring*> rings_;
     int                target_vertices_;
     double             total_displacement_ = 0.0;
 
+    struct HeapEntry {
+        double  cost;
+        int     version;
+        Vertex* v;
+        bool operator>(const HeapEntry& o) const { return cost > o.cost; }
+    };
+    std::priority_queue<HeapEntry,
+                        std::vector<HeapEntry>,
+                        std::greater<HeapEntry>> pq_;
+
+    void push_vertex(Vertex* v) {
+        if (!v->alive || v->ring->size() <= 3) return;
+        v->invalidate_cache();
+        ++v->current_version;
+        pq_.push({std::abs(v->triangle_area()), v->current_version, v});
+    }
+
 public:
-    APSCSimplifier(std::vector<Ring*> rings, int target)
-        : rings_(std::move(rings)), target_vertices_(target) {}
+    GreedySimplifier(std::vector<Ring*> rings, int target)
+        : rings_(std::move(rings)), target_vertices_(target)
+    {
+        for (auto* r : rings_)
+            r->for_each([&](Vertex* v) { push_vertex(v); });
+    }
 
     void simplify() {
         int total = 0;
         for (auto* r : rings_) total += r->size();
 
-        for (auto* r : rings_) {
-            CollapseQueue q;
-            r->for_each([&](Vertex* v) { q.push(v); });
+        while (total > target_vertices_ && !pq_.empty()) {
+            auto [cost, ver, v] = pq_.top();
+            pq_.pop();
 
-            while (r->size() > 3 && total > target_vertices_) {
-                Vertex* b = q.pop();
-                if (!b) break;
+            if (!v->alive || ver != v->current_version || v->ring->size() <= 3)
+                continue;
 
-                Vertex* a = b->prev;
-                Vertex* c = b->next;
-                Vertex* d = c->next;
-
-                // Signed area of quadrilateral ABCD (= area to preserve).
-                double area_abc = 0.5 * ((b->x-a->x)*(c->y-a->y) - (c->x-a->x)*(b->y-a->y));
-                double area_acd = 0.5 * ((c->x-a->x)*(d->y-a->y) - (d->x-a->x)*(c->y-a->y));
-                double quad_area = area_abc + area_acd;
-
-                double dx = d->x - a->x, dy = d->y - a->y;
-                double len_ad = std::hypot(dx, dy);
-
-                double ex, ey;
-                if (len_ad < 1e-9) {
-                    ex = d->x; ey = d->y;
-                } else {
-                    // E lies on line E↔ parallel to AD at signed height h.
-                    double h  = (2.0 * quad_area) / len_ad;
-                    double nx = -dy / len_ad, ny = dx / len_ad; // unit normal
-                    double px = a->x + h * nx, py = a->y + h * ny; // point on E↔
-
-                    // If BC is parallel to AD, use the closer endpoint of BC.
-                    double dot_bc_ad = (c->x - b->x) * dx + (c->y - b->y) * dy;
-                    double len_bc    = std::hypot(c->x - b->x, c->y - b->y);
-                    bool   parallel  = (len_bc > 1e-9) &&
-                        (std::abs(std::abs(dot_bc_ad / (len_ad * len_bc)) - 1.0) < 1e-5);
-
-                    if (parallel) {
-                        double db = point_to_line_dist(b->x, b->y, a->x, a->y, d->x, d->y);
-                        double dc = point_to_line_dist(c->x, c->y, a->x, a->y, d->x, d->y);
-                        if (db <= dc) {
-                            auto pt = line_intersect(px, py, dx, dy,
-                                                     a->x, a->y, b->x-a->x, b->y-a->y);
-                            ex = pt.first; ey = pt.second;
-                        } else {
-                            auto pt = line_intersect(px, py, dx, dy,
-                                                     c->x, c->y, d->x-c->x, d->y-c->y);
-                            ex = pt.first; ey = pt.second;
-                        }
-                    } else {
-                        // TODO: non-parallel case — midpoint heuristic is incorrect;
-                        // proper placement requires a side test (Kronenfeld).
-                        ex = px + dx * 0.5;
-                        ey = py + dy * 0.5;
-                    }
-                }
-
-                r->collapse_segment(b, c, ex, ey);
-                total_displacement_ += std::abs(quad_area);
-                --total;
-
-                if (a->alive) q.push(a);
-                if (b->alive) q.push(b);
-                if (d->alive) q.push(d);
-            }
+            total_displacement_ += std::abs(v->triangle_area());
+            auto [p, n] = v->ring->collapse_vertex(v);
+            push_vertex(p);
+            push_vertex(n);
+            --total;
         }
     }
 
@@ -339,7 +255,7 @@ int main(int argc, char** argv) {
     double initial_signed_area = 0.0;
     for (auto* r : all_rings) initial_signed_area += r->signed_area();
 
-    APSCSimplifier simplifier(all_rings, target_vertices);
+    GreedySimplifier simplifier(all_rings, target_vertices);
     simplifier.simplify();
 
     std::cout << "ring_id,vertex_id,x,y\n";
