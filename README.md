@@ -24,7 +24,8 @@ Key data structures:
 ├── makefile
 ├── src/
 │   ├── SimplifyPolygon.cpp # Main simplification program
-│   └── validate.cpp        # Property-based output validator
+│   ├── validate.cpp        # Property-based output validator
+│   └── benchmark.cpp       # Runtime and memory benchmarking
 ├── test_cases/
 │   ├── input_*.csv         # Input polygons (ring_id, vertex_id, x, y)
 │   └── output_*.txt        # Reference outputs
@@ -40,6 +41,7 @@ Key data structures:
 
 ```bash
 make           # builds build/simplify and build/validate
+make benchmark # builds and runs benchmark, outputs to my_output/benchmark.html
 make clean     # removes build/ and my_output/
 ```
 
@@ -85,6 +87,25 @@ Pipes each test case through `build/validate`, which checks. Outputs saved to `m
 
 ```bash
 make test      # outputs saved to my_output/output_*.txt
+```
+
+---
+
+## Benchmarking
+
+```bash
+make benchmark
+```
+
+Runs `build/simplify` on all 15 test cases, measuring wall-clock time (median of 5 trials) and peak memory (RSS via `getrusage`). Generates an interactive HTML report at `my_output/benchmark.html` with two Vega-Lite bar charts:
+
+- **Runtime graph** — median running time per test case (microseconds)
+- **Memory graph** — peak resident set size per test case (KB)
+
+Each bar is labeled with its exact value. To change the number of trials:
+
+```bash
+build/benchmark 10    # 10 trials per test case
 ```
 
 ---
