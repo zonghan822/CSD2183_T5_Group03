@@ -1,14 +1,16 @@
 # Makefile for Polygon Simplification Project
 
-CXX          = g++
-CXXFLAGS     = -std=c++17 -O2 -Wall -Wextra
-BUILDDIR     = build
-OUTDIR       = my_output
-TARGET       = $(BUILDDIR)/simplify
-VALIDATE     = $(BUILDDIR)/validate
-SRC          = src/SimplifyPolygon.cpp
-VALIDATE_SRC = src/validate.cpp
-TC           = test_cases
+CXX           = g++
+CXXFLAGS      = -std=c++17 -O2 -Wall -Wextra
+BUILDDIR      = build
+OUTDIR        = my_output
+TARGET        = $(BUILDDIR)/simplify
+VALIDATE      = $(BUILDDIR)/validate
+BENCHMARK     = $(BUILDDIR)/benchmark
+SRC           = src/SimplifyPolygon.cpp
+VALIDATE_SRC  = src/validate.cpp
+BENCHMARK_SRC = src/benchmark.cpp
+TC            = test_cases
 
 all: $(TARGET) $(VALIDATE)
 
@@ -17,6 +19,9 @@ $(TARGET): $(SRC) | $(BUILDDIR)
 
 $(VALIDATE): $(VALIDATE_SRC) | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -o $(VALIDATE) $(VALIDATE_SRC)
+
+$(BENCHMARK): $(BENCHMARK_SRC) | $(BUILDDIR)
+	$(CXX) $(CXXFLAGS) -o $(BENCHMARK) $(BENCHMARK_SRC)
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
@@ -79,4 +84,7 @@ check: $(TARGET) $(VALIDATE) | $(OUTDIR)
 	@$(call check_case,original_09,99)
 	@$(call check_case,original_10,99)
 
-.PHONY: all clean test check
+benchmark: $(TARGET) $(BENCHMARK) | $(OUTDIR)
+	@$(BENCHMARK)
+
+.PHONY: all clean test check benchmark
