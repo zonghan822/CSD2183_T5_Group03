@@ -7,10 +7,9 @@
  * Usage:
  * ./simplify <input_file.csv> <target_vertices>
  *
- * This algorithm uses a global priority queue across all rings and tracks
- * accumulated symmetric difference error to minimize Total Areal Displacement,
- * while maintaining the precise area-correction pass to ensure exact input/output
- * area equivalence.
+ * This algorithm uses a global priority queue across all rings to greedily
+ * remove the vertex with the smallest triangle area at each step, followed by
+ * a per-ring area-correction pass to ensure exact input/output area equivalence.
  */
 
 #include <algorithm>
@@ -47,7 +46,6 @@ struct Vertex {
     int  vid   = 0;
 
     int    current_version   = 0;
-    double accumulated_error = 0.0;
 
     mutable bool   area_valid  = false;
     mutable double cached_area = 0.0;
@@ -366,23 +364,15 @@ class GlobalAPSCSimplifier {
     void push_vertex(Vertex* v) {
         if (!v->alive || v->ring->size() <= 3) return;
         v->invalidate_cache();
-
-        double base_cost = std::abs(v->triangle_area());
-
-        double dx1 = v->x - v->prev->x, dy1 = v->y - v->prev->y;
-        double dx2 = v->next->x - v->x, dy2 = v->next->y - v->y;
-        double dot = dx1*dx2 + dy1*dy2;
-        double len1 = std::hypot(dx1, dy1), len2 = std::hypot(dx2, dy2);
-        double cos_theta = dot / (len1 * len2 + 1e-9);
-        double penalty   = (cos_theta < -0.5) ? 2.0 : 1.0;
-
-        double final_cost = (base_cost + v->accumulated_error) * penalty;
-
+        double cost = std::abs(v->triangle_area());
         ++v->current_version;
-        pq_.push({final_cost, v->current_version, v});
+        pq_.push({cost, v->current_version, v});
     }
 
-    // Iterative Newton correction
+    // Iterative Newton correction: shift the vertex with the longest base
+    // perpendicularly until the ring's signed area matches its original value.
+    // Candidates are tried in descending base-length order; any candidate whose
+    // correction would create a topology violation is skipped.
     void correct_area(Ring* ring) {
         double target        = orig_area_.at(ring->rid);
         double target_signed = ring->is_exterior ? target : -target;
@@ -392,24 +382,45 @@ class GlobalAPSCSimplifier {
             double error   = current - target_signed;
             if (std::abs(error) < 1e-10 * target) return;
 
-            Vertex* best_v = nullptr;
-            double  best_L = 0.0;
+            std::vector<std::pair<double, Vertex*>> candidates;
             ring->for_each([&](Vertex* v) {
                 double dx = v->next->x - v->prev->x;
                 double dy = v->next->y - v->prev->y;
-                double L  = std::hypot(dx, dy);
-                if (L > best_L) { best_L = L; best_v = v; }
+                candidates.push_back({std::hypot(dx, dy), v});
             });
-            if (!best_v || best_L < 1e-12) return;
+            std::sort(candidates.begin(), candidates.end(),
+                      [](const auto& a, const auto& b){ return a.first > b.first; });
 
-            double dx    = best_v->next->x - best_v->prev->x;
-            double dy    = best_v->next->y - best_v->prev->y;
-            double L     = best_L;
-            double delta = 2.0 * error / L;
-            best_v->x   += (-dy / L) * delta;
-            best_v->y   += ( dx / L) * delta;
-            best_v->invalidate_cache();
-            ring->invalidate_area_cache();
+            bool corrected = false;
+            for (auto& [L, v] : candidates) {
+                if (L < 1e-12) break;
+
+                double dx    = v->next->x - v->prev->x;
+                double dy    = v->next->y - v->prev->y;
+                double delta = 2.0 * error / L;
+                double old_x = v->x, old_y = v->y;
+                double new_x = old_x + (-dy / L) * delta;
+                double new_y = old_y + ( dx / L) * delta;
+
+                spatial_->remove_vertex_edges(v);
+                v->x = new_x;
+                v->y = new_y;
+
+                if (spatial_->new_edge_valid(v->prev, v) &&
+                    spatial_->new_edge_valid(v, v->next)) {
+                    spatial_->add_new_edge(v->prev, v);
+                    spatial_->add_new_edge(v, v->next);
+                    v->invalidate_cache();
+                    ring->invalidate_area_cache();
+                    corrected = true;
+                    break;
+                }
+
+                v->x = old_x;
+                v->y = old_y;
+                spatial_->restore_vertex_edges(v);
+            }
+            if (!corrected) return;
         }
     }
 
@@ -421,10 +432,7 @@ public:
         for (auto* r : rings_) {
             orig_area_[r->rid]  = r->area();
             r->original_area    = orig_area_[r->rid];
-            r->for_each([&](Vertex* v) {
-                v->accumulated_error = 0.0;
-                push_vertex(v);
-            });
+            r->for_each([&](Vertex* v) { push_vertex(v); });
         }
     }
 
@@ -450,9 +458,6 @@ public:
                 total_disp_ += step_disp;
                 v->ring->collapse_vertex(v);
                 spatial_->add_new_edge(p, n);
-                // Propagate half the displacement to each neighbour
-                p->accumulated_error += step_disp * 0.5;
-                n->accumulated_error += step_disp * 0.5;
                 push_vertex(p);
                 push_vertex(n);
                 --total;
@@ -516,6 +521,12 @@ int main(int argc, char** argv) {
     std::vector<Ring*> all_rings;
     for (auto& r : owned_rings) all_rings.push_back(r.get());
 
+    // Assign globally unique vertex IDs across all rings so that the spatial
+    // index hash keys (which encode pairs of vids) never collide across rings.
+    int global_vid = 0;
+    for (auto* r : all_rings)
+        r->for_each([&](Vertex* v) { v->vid = ++global_vid; });
+
     double initial_signed_area = 0.0;
     for (auto* r : all_rings) initial_signed_area += r->signed_area();
 
@@ -523,7 +534,7 @@ int main(int argc, char** argv) {
     simplifier.simplify();
 
     std::cout << "ring_id,vertex_id,x,y\n";
-    std::cout << std::defaultfloat;
+    std::cout << std::defaultfloat << std::setprecision(15);
 
     double final_signed_area = 0.0;
     for (auto* r : all_rings) {
