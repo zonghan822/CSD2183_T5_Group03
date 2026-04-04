@@ -2,40 +2,48 @@
 
 CXX          = g++
 CXXFLAGS     = -std=c++17 -O2 -Wall -Wextra
-TARGET       = simplify
-VALIDATE     = validate
+BUILDDIR     = build
+OUTDIR       = my_output
+TARGET       = $(BUILDDIR)/simplify
+VALIDATE     = $(BUILDDIR)/validate
 SRC          = src/SimplifyPolygon.cpp
 VALIDATE_SRC = src/validate.cpp
 TC           = test_cases
 
 all: $(TARGET) $(VALIDATE)
 
-$(TARGET): $(SRC)
+$(TARGET): $(SRC) | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SRC)
 
-$(VALIDATE): $(VALIDATE_SRC)
+$(VALIDATE): $(VALIDATE_SRC) | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -o $(VALIDATE) $(VALIDATE_SRC)
 
+$(BUILDDIR):
+	mkdir -p $(BUILDDIR)
+
+$(OUTDIR):
+	mkdir -p $(OUTDIR)
+
 clean:
-	rm -f $(TARGET) $(TARGET).exe $(VALIDATE) $(VALIDATE).exe _out.txt _val.txt
+	rm -rf $(BUILDDIR) $(OUTDIR)
 
 # ─── Tests ────────────────────────────────────────────────────────────────────
 
 define test_case
-./$(TARGET) $(TC)/input_$(1).csv $(2) > _out.txt 2>&1; \
-diff --strip-trailing-cr -q $(TC)/output_$(1).txt _out.txt > /dev/null 2>&1 \
+$(TARGET) $(TC)/input_$(1).csv $(2) > $(OUTDIR)/output_$(1).txt 2>&1; \
+diff --strip-trailing-cr -q $(TC)/output_$(1).txt $(OUTDIR)/output_$(1).txt > /dev/null 2>&1 \
 && echo "PASS: $(1)" || echo "FAIL: $(1)"
 endef
 
 define check_case
-if ./$(TARGET) $(TC)/input_$(1).csv $(2) | ./$(VALIDATE) $(TC)/input_$(1).csv $(2) > _val.txt 2>&1; then \
+if $(TARGET) $(TC)/input_$(1).csv $(2) | $(VALIDATE) $(TC)/input_$(1).csv $(2) > $(OUTDIR)/check_$(1).txt 2>&1; then \
     echo "PASS: $(1)"; \
 else \
-    echo "FAIL: $(1)"; cat _val.txt; \
+    echo "FAIL: $(1)"; cat $(OUTDIR)/check_$(1).txt; \
 fi
 endef
 
-test: $(TARGET)
+test: $(TARGET) | $(OUTDIR)
 	@echo "Running all test cases..."
 	@$(call test_case,rectangle_with_two_holes,7)
 	@$(call test_case,cushion_with_hexagonal_hole,13)
@@ -52,9 +60,8 @@ test: $(TARGET)
 	@$(call test_case,original_08,99)
 	@$(call test_case,original_09,99)
 	@$(call test_case,original_10,99)
-	@rm -f _out.txt
 
-check: $(TARGET) $(VALIDATE)
+check: $(TARGET) $(VALIDATE) | $(OUTDIR)
 	@echo "Validating all test cases..."
 	@$(call check_case,rectangle_with_two_holes,7)
 	@$(call check_case,cushion_with_hexagonal_hole,13)
@@ -71,6 +78,5 @@ check: $(TARGET) $(VALIDATE)
 	@$(call check_case,original_08,99)
 	@$(call check_case,original_09,99)
 	@$(call check_case,original_10,99)
-	@rm -f _val.txt
 
 .PHONY: all clean test check

@@ -25,9 +25,11 @@ Key data structures:
 ├── src/
 │   ├── SimplifyPolygon.cpp # Main simplification program
 │   └── validate.cpp        # Property-based output validator
-└── test_cases/
-    ├── input_*.csv         # Input polygons (ring_id, vertex_id, x, y)
-    └── output_*.txt        # Reference outputs
+├── test_cases/
+│   ├── input_*.csv         # Input polygons (ring_id, vertex_id, x, y)
+│   └── output_*.txt        # Reference outputs
+├── build/                  # Compiled binaries (git-ignored)
+└── my_output/              # Test run outputs (git-ignored)
 ```
 
 ---
@@ -37,8 +39,8 @@ Key data structures:
 ### Linux / WSL (GNU make + g++)
 
 ```bash
-make           # builds ./simplify and ./validate
-make clean
+make           # builds build/simplify and build/validate
+make clean     # removes build/ and my_output/
 ```
 
 ---
@@ -46,7 +48,7 @@ make clean
 ## Usage
 
 ```bash
-./simplify <input_file.csv> <target_vertices>
+build/simplify <input_file.csv> <target_vertices>
 ```
 
 Input CSV columns: `ring_id, vertex_id, x, y`  
@@ -54,7 +56,7 @@ Output: simplified CSV to stdout followed by summary metrics.
 
 **Example:**
 ```bash
-./simplify test_cases/input_original_01.csv 99
+build/simplify test_cases/input_original_01.csv 99
 ```
 
 ---
@@ -67,7 +69,7 @@ Output: simplified CSV to stdout followed by summary metrics.
 make check
 ```
 
-Pipes each test case through `./validate`, which checks:
+Pipes each test case through `build/validate`, which checks. Outputs saved to `my_output/check_*.txt`:
 
 | Check | Criterion |
 |---|---|
@@ -82,7 +84,7 @@ Pipes each test case through `./validate`, which checks:
 ### Reference diff (exact output match)
 
 ```bash
-make test
+make test      # outputs saved to my_output/output_*.txt
 ```
 
 ---
